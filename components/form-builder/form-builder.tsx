@@ -1,0 +1,699 @@
+
+"use client"
+import { useState, useEffect, useCallback } from "react"
+import { FormElement } from "@/types/form";
+import { Integration } from "@/types/integration";
+import { useAction, useMutation } from "convex/react";
+import type { Id } from "../../convex/_generated/dataModel";
+import { api } from "../../convex/_generated/api";
+import { DndContext, closestCenter, DragEndEvent, DragStartEvent, DragOverlay, useDroppable } from "@dnd-kit/core"
+import { SortableContext, verticalListSortingStrategy, arrayMove } from "@dnd-kit/sortable"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Checkbox } from "@/components/ui/checkbox"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
+import { Textarea } from "@/components/ui/textarea"
+import { Trash2, Settings, Eye, Save, EyeOff, Share, Globe, Copy, Zap } from "lucide-react"
+import { FormElementPalette } from "./form-element-palette"
+import { FormElementConfig } from "./form-element-config"
+import { FormPreview } from "./form-preview"
+import { RealtimePreview } from "./realtime-preview"
+import { PublishDialog } from "./publish-dialog"
+import { IntegrationsManager } from "../integrations/integrations-manager"
+import { Badge } from "@/components/ui/badge"
+import { useToast } from "@/hooks/use-toast"
+
+export type FormSchema = {
+  id: string
+  title: string
+  description: string
+  elements: FormElement[]
+  status: "draft" | "published" | "unpublished"
+  publishedAt?: number
+  shareUrl?: string
+  embedCode?: string
+}
+
+function DroppableCanvas({ children }: { children: React.ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({
+    id: "canvas",
+    data: {
+      type: "canvas",
+    },
+  })
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={`min-h-96 p-6 border-2 border-dashed rounded-lg transition-colors ${
+        isOver ? "border-primary bg-primary/5" : "border-muted-foreground/25"
+      }`}
+    >
+      {children}
+    </div>
+  )
+}
+
+
+export function FormBuilder() {
+  const [formId, setFormId] = useState<Id<"forms"> | null>(null);
+  const [isNew, setIsNew] = useState(true);
+  const [formSchema, setFormSchema] = useState<FormSchema>({
+    id: "",
+    title: "Untitled Form",
+    description: "Form description",
+    elements: [],
+    status: "draft",
+  })
+
+  // Memory optimization: limit form elements to prevent memory issues
+  const maxElements = 50;
+
+  const [selectedElementId, setSelectedElementId] = useState<string | null>(null)
+  const selectedElement = selectedElementId ? formSchema.elements.find(el => el.id === selectedElementId) : null
+  const [showPreview, setShowPreview] = useState(false)
+  const [showRealtimePreview, setShowRealtimePreview] = useState(true)
+  const [showPublishDialog, setShowPublishDialog] = useState(false)
+  const [showIntegrations, setShowIntegrations] = useState(false)
+  const [integrations, setIntegrations] = useState<Integration[]>([])
+  const [activeId, setActiveId] = useState<string | null>(null)
+  const [showAIGenerateDialog, setShowAIGenerateDialog] = useState(false)
+  const [isGenerating, setIsGenerating] = useState(false)
+  const [prompt, setPrompt] = useState("")
+  const { toast } = useToast()
+
+  const generateForm = useAction(api.forms.actions.generateForm)
+  const createForm = useMutation(api.forms.mutations.createForm)
+  const updateForm = useMutation(api.forms.mutations.updateForm)
+  const publishForm = useMutation(api.forms.mutations.publishForm)
+  const unpublishForm = useMutation(api.forms.mutations.unpublishForm)
+
+  // Memory optimization: cleanup on unmount
+  useEffect(() => {
+    return () => {
+      // Clear any pending timeouts or intervals
+      setFormSchema(prev => ({ ...prev, elements: [] }));
+    };
+  }, []);
+
+  const handleDragStart = (event: DragStartEvent) => {
+    setActiveId(event.active.id as string)
+  }
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event
+    setActiveId(null)
+
+    if (!over) return
+
+    // Adding new element from palette
+    if (active.data.current?.type === "palette" && over.data.current?.type === "canvas") {
+      // Memory optimization: prevent adding too many elements
+      if (formSchema.elements.length >= maxElements) {
+        toast({
+          title: "Maximum elements reached",
+          description: `You can only add up to ${maxElements} elements to prevent memory issues`,
+          variant: "destructive",
+        })
+        return
+      }
+
+      const elementType = active.id as FormElement["type"]
+      const newElement: FormElement = {
+        id: `element-${Date.now()}`,
+        type: elementType,
+        label: `${elementType.charAt(0).toUpperCase() + elementType.slice(1)} Field`,
+        placeholder: `Enter ${elementType}`,
+        required: false,
+      }
+
+      if (elementType === "select" || elementType === "radio") {
+        newElement.options = ["Option 1", "Option 2", "Option 3"]
+      }
+
+      const newElements = [...formSchema.elements]
+      newElements.push(newElement)
+
+      setFormSchema((prev) => {
+        const updated = {
+          ...prev,
+          elements: newElements,
+        }
+        if (!isNew && formId) {
+          const { id: _, ...updateArgs } = updated
+          updateForm({ id: formId, ...updateArgs })
+        }
+        return updated
+      })
+      return
+    }
+
+    // Reordering elements in canvas
+    if (active.data.current?.type === "canvas" && over.data.current?.type === "canvas") {
+      const oldIndex = formSchema.elements.findIndex((el) => el.id === active.id)
+      const newIndex = formSchema.elements.findIndex((el) => el.id === over.id)
+
+      if (oldIndex !== newIndex) {
+        const newElements = arrayMove(formSchema.elements, oldIndex, newIndex)
+        setFormSchema((prev) => {
+          const updated = {
+            ...prev,
+            elements: newElements,
+          }
+          if (!isNew && formId) {
+            const { id: _, ...updateArgs } = updated
+            updateForm({ id: formId, ...updateArgs })
+          }
+          return updated
+        })
+      }
+    }
+  }
+
+  const updateElement = (elementId: string, updates: Partial<FormElement>) => {
+    setFormSchema((prev) => {
+      const updated = {
+        ...prev,
+        elements: prev.elements.map((el) => (el.id === elementId ? { ...el, ...updates } : el)),
+      }
+      if (!isNew && formId) {
+        const { id: _, ...updateArgs } = updated
+        updateForm({ id: formId, ...updateArgs })
+      }
+      return updated
+    })
+  }
+
+  const deleteElement = (elementId: string) => {
+    setFormSchema((prev) => {
+      const updated = {
+        ...prev,
+        elements: prev.elements.filter((el) => el.id !== elementId),
+      }
+      if (!isNew && formId) {
+        const { id: _, ...updateArgs } = updated
+        updateForm({ id: formId, ...updateArgs })
+      }
+      return updated
+    })
+    setSelectedElementId(null)
+  }
+
+  const handlePublishForm = async (settings: { allowAnonymous: boolean; collectEmails: boolean }) => {
+    if (formSchema.elements.length === 0) {
+      toast({
+        title: "Cannot publish empty form",
+        description: "Add at least one form element before publishing",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      let currentFormId = formId
+      if (isNew) {
+        // Save first if new
+        const newId = await createForm({
+          title: formSchema.title,
+          description: formSchema.description,
+          elements: formSchema.elements,
+        }) as Id<"forms">
+        currentFormId = newId
+        setFormId(newId)
+        setIsNew(false)
+        setFormSchema(prev => ({ ...prev, id: newId }))
+        toast({
+          title: "Form saved",
+          description: "Form created and ready to publish",
+        })
+      }
+
+      // Publish
+      await publishForm({ id: currentFormId! })
+
+      // Generate share URL and embed code
+      const shareUrl = `${window.location.origin}/forms/${currentFormId}`
+      const embedCode = `<iframe src="${shareUrl}?embed=true" width="100%" height="600" frameborder="0"></iframe>`
+
+      setFormSchema((prev) => ({
+        ...prev,
+        status: "published",
+        publishedAt: Date.now(),
+        shareUrl,
+        embedCode,
+      }))
+
+      toast({
+        title: "Form published successfully!",
+        description: "Your form is now live and ready to collect responses",
+      })
+
+      setShowPublishDialog(false)
+    } catch (error) {
+      toast({
+        title: "Failed to publish form",
+        description: error instanceof Error ? error.message : "An error occurred",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const handleUnpublishForm = async () => {
+    if (!formId) {
+      toast({
+        title: "No form to unpublish",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      await unpublishForm({ id: formId })
+
+      setFormSchema((prev) => ({
+        ...prev,
+        status: "unpublished",
+      }))
+
+      toast({
+        title: "Form unpublished",
+        description: "Your form is no longer accepting responses",
+      })
+    } catch (error) {
+      toast({
+        title: "Failed to unpublish form",
+        description: error instanceof Error ? error.message : "An error occurred",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const copyShareUrl = () => {
+    if (formSchema.shareUrl) {
+      navigator.clipboard.writeText(formSchema.shareUrl)
+      toast({
+        title: "Link copied!",
+        description: "Share URL has been copied to clipboard",
+      })
+    }
+  }
+
+  const copyEmbedCode = () => {
+    if (formSchema.embedCode) {
+      navigator.clipboard.writeText(formSchema.embedCode)
+      toast({
+        title: "Embed code copied!",
+        description: "Embed code has been copied to clipboard",
+      })
+    }
+  }
+
+  const saveForm = async () => {
+    if (formSchema.elements.length === 0 && formSchema.title === "Untitled Form") {
+      toast({
+        title: "Empty form",
+        description: "Add a title or elements to save",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      if (isNew) {
+        const newId = await createForm({
+          title: formSchema.title,
+          description: formSchema.description,
+          elements: formSchema.elements,
+        }) as Id<"forms">
+        setFormId(newId)
+        setIsNew(false)
+        setFormSchema(prev => ({ ...prev, id: newId }))
+        toast({
+          title: "Form created",
+          description: "Your form has been saved successfully",
+        })
+      } else if (formId) {
+        await updateForm({ id: formId, title: formSchema.title, description: formSchema.description, elements: formSchema.elements })
+        toast({
+          title: "Form updated",
+          description: "Your changes have been saved",
+        })
+      }
+    } catch (error) {
+      toast({
+        title: "Failed to save form",
+        description: error instanceof Error ? error.message : "An error occurred",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const handleGenerateForm = async () => {
+    if (!prompt.trim()) {
+      toast({
+        title: "Please enter a prompt",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsGenerating(true)
+    try {
+      const generatedSchema = await generateForm({ prompt })
+      const newSchema = {
+        ...generatedSchema,
+        status: "draft",
+      } as FormSchema
+      setFormSchema(newSchema)
+
+      // Auto-save the generated form
+      await saveForm() // This will create it and update id, isNew, etc.
+
+      setShowAIGenerateDialog(false)
+      setPrompt("")
+      toast({
+        title: "Form generated and saved!",
+        description: "Your AI-generated form is ready and saved.",
+      })
+    } catch (error) {
+      toast({
+        title: "Failed to generate form",
+        description: error instanceof Error ? error.message : "Please try again or check your OpenAI API key.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsGenerating(false)
+    }
+  }
+
+  const renderFormElement = (element: FormElement, index: number) => {
+    const isSelected = selectedElement?.id === element.id
+
+    return (
+      <div
+        key={element.id}
+        className={`mb-4 p-4 border rounded-lg transition-all cursor-move ${
+          isSelected ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
+        }`}
+        onClick={() => setSelectedElementId(element.id)}
+        data-element-id={element.id}
+      >
+        <div className="flex items-center justify-between mb-2">
+          <Label className="text-sm font-medium">{element.label}</Label>
+          <div className="flex items-center space-x-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation()
+                setSelectedElementId(element.id)
+              }}
+            >
+              <Settings className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation()
+                deleteElement(element.id)
+              }}
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+
+        {element.type === "text" || element.type === "email" || element.type === "number" ? (
+          <Input placeholder={element.placeholder} disabled />
+        ) : element.type === "textarea" ? (
+          <Textarea placeholder={element.placeholder} disabled />
+        ) : element.type === "select" ? (
+          <Select disabled>
+            <SelectTrigger>
+              <SelectValue placeholder="Select an option" />
+            </SelectTrigger>
+            <SelectContent>
+              {element.options?.map((option, idx) => (
+                <SelectItem key={idx} value={option}>
+                  {option}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : element.type === "radio" ? (
+          <RadioGroup disabled>
+            {element.options?.map((option, idx) => (
+              <div key={idx} className="flex items-center space-x-2">
+                <RadioGroupItem value={option} id={`${element.id}-${idx}`} />
+                <Label htmlFor={`${element.id}-${idx}`}>{option}</Label>
+              </div>
+            ))}
+          </RadioGroup>
+        ) : element.type === "checkbox" ? (
+          <div className="flex items-center space-x-2">
+            <Checkbox disabled />
+            <Label>{element.label}</Label>
+          </div>
+        ) : null}
+
+        {element.required && <p className="text-xs text-destructive mt-1">* Required</p>}
+      </div>
+    )
+  }
+
+  if (showPreview) {
+    return (
+      <div className="h-full">
+        <div className="flex items-center justify-between p-4 border-b">
+          <h2 className="text-lg font-semibold">Form Preview</h2>
+          <Button variant="outline" onClick={() => setShowPreview(false)}>
+            Back to Editor
+          </Button>
+        </div>
+        <FormPreview formSchema={formSchema} />
+      </div>
+    )
+  }
+
+  if (showIntegrations) {
+    return (
+      <div className="h-full">
+        <div className="flex items-center justify-between p-4 border-b">
+          <h2 className="font-semibold text-lg">Form Integrations</h2>
+          <Button variant="outline" onClick={() => setShowIntegrations(false)}>
+            Back to Editor
+          </Button>
+        </div>
+        <IntegrationsManager
+          formId={formSchema.id}
+          integrations={integrations}
+          onUpdateIntegrations={setIntegrations}
+        />
+      </div>
+    )
+  }
+
+  return (
+    <DndContext
+      collisionDetection={closestCenter}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+    >
+      <div className="h-full flex">
+        {/* Form Element Palette */}
+        <div className="w-64 border-r border-border bg-sidebar">
+          <div className="p-4 border-b">
+            <h3 className="font-semibold text-sidebar-foreground">Form Elements</h3>
+            <p className="text-xs text-sidebar-foreground/70">Drag elements to build your form</p>
+          </div>
+          <FormElementPalette />
+        </div>
+
+        {/* Form Canvas */}
+        <div className={`flex-1 flex flex-col ${showRealtimePreview ? "max-w-[50%]" : ""}`}>
+          {/* Toolbar */}
+          <div className="flex items-center justify-between p-4 border-b bg-card">
+            <div className="flex items-center space-x-4">
+              <div>
+                <Input
+                  value={formSchema.title}
+                  onChange={(e) => setFormSchema((prev) => {
+                    const updated = { ...prev, title: e.target.value }
+                    if (!isNew && formId) {
+                      const { id: _, ...updateArgs } = updated
+                      updateForm({ id: formId, ...updateArgs })
+                    }
+                    return updated
+                  })}
+                  className="font-semibold text-lg border-none p-0 h-auto focus-visible:ring-0"
+                  placeholder="Form Title"
+                />
+                <Input
+                  value={formSchema.description}
+                  onChange={(e) => setFormSchema((prev) => {
+                    const updated = { ...prev, description: e.target.value }
+                    if (!isNew && formId) {
+                      const { id: _, ...updateArgs } = updated
+                      updateForm({ id: formId, ...updateArgs })
+                    }
+                    return updated
+                  })}
+                  className="text-sm text-muted-foreground border-none p-0 h-auto focus-visible:ring-0 mt-1"
+                  placeholder="Form Description"
+                />
+              </div>
+              {formSchema.status === "published" && (
+                <div className="flex items-center space-x-2 text-sm">
+                  <Globe className="h-4 w-4 text-green-600" />
+                  <span className="text-green-600 font-medium">Published</span>
+                </div>
+              )}
+            </div>
+            <div className="flex items-center space-x-2">
+              <Button
+                variant="outline"
+                onClick={() => setShowRealtimePreview(!showRealtimePreview)}
+                className={showRealtimePreview ? "bg-primary/10" : ""}
+              >
+                {showRealtimePreview ? <EyeOff className="h-4 w-4 mr-2" /> : <Eye className="h-4 w-4 mr-2" />}
+                {showRealtimePreview ? "Hide Preview" : "Show Preview"}
+              </Button>
+              <Button variant="outline" onClick={() => setShowPreview(true)}>
+                <Eye className="h-4 w-4 mr-2" />
+                Full Preview
+              </Button>
+              <Button variant="outline" onClick={() => setShowIntegrations(true)}>
+                <Zap className="h-4 w-4 mr-2" />
+                Integrations
+                {integrations.filter((i) => i.enabled).length > 0 && (
+                  <Badge variant="secondary" className="ml-2">
+                    {integrations.filter((i) => i.enabled).length}
+                  </Badge>
+                )}
+              </Button>
+              {formSchema.status === "published" ? (
+                <div className="flex items-center space-x-2">
+                  <Button variant="outline" onClick={copyShareUrl}>
+                    <Copy className="h-4 w-4 mr-2" />
+                    Copy Link
+                  </Button>
+                  <Button variant="outline" onClick={() => setShowPublishDialog(true)}>
+                    <Share className="h-4 w-4 mr-2" />
+                    Share Options
+                  </Button>
+                  <Button variant="outline" onClick={handleUnpublishForm}>
+                    Unpublish
+                  </Button>
+                </div>
+              ) : (
+                <Button onClick={() => setShowPublishDialog(true)} disabled={isNew && formSchema.elements.length === 0}>
+                  <Globe className="h-4 w-4 mr-2" />
+                  Publish Form
+                </Button>
+              )}
+              <Dialog open={showAIGenerateDialog} onOpenChange={setShowAIGenerateDialog}>
+                <DialogTrigger asChild>
+                  <Button variant="outline">
+                    <Zap className="h-4 w-4 mr-2" />
+                    AI Generate
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>Generate Form with AI</DialogTitle>
+                    <DialogDescription>
+                      Describe the form you want to create (e.g., "job application form with name, email, and resume").
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-4">
+                    <Textarea
+                      placeholder="Enter your form description..."
+                      value={prompt}
+                      onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setPrompt(e.target.value)}
+                      disabled={isGenerating}
+                    />
+                  </div>
+                  <DialogFooter>
+                    <Button
+                      onClick={handleGenerateForm}
+                      disabled={isGenerating || !prompt.trim()}
+                    >
+                      {isGenerating ? "Generating..." : "Generate Form"}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+              <Button variant="outline" onClick={saveForm}>
+                <Save className="h-4 w-4 mr-2" />
+                Save
+              </Button>
+            </div>
+          </div>
+
+          {/* Canvas Area */}
+          <div className="flex-1 p-6">
+            <DroppableCanvas>
+              {formSchema.elements.length === 0 ? (
+                <div className="text-center text-muted-foreground py-12">
+                  <p className="text-lg mb-2">Start building your form</p>
+                  <p className="text-sm">Drag form elements from the left panel to get started</p>
+                </div>
+              ) : (
+                <SortableContext items={formSchema.elements.map(el => el.id)} strategy={verticalListSortingStrategy}>
+                  {formSchema.elements.map((element, index) => renderFormElement(element, index))}
+                </SortableContext>
+              )}
+            </DroppableCanvas>
+          </div>
+        </div>
+
+        {showRealtimePreview && (
+          <div className="flex-1 border-l border-border bg-muted/30">
+            <div className="p-4 border-b bg-card">
+              <h3 className="font-semibold text-foreground">Live Preview</h3>
+              <p className="text-xs text-muted-foreground">See your form as users will</p>
+            </div>
+            <div className="h-[calc(100%-5rem)] overflow-y-auto">
+              <RealtimePreview formSchema={formSchema} />
+            </div>
+          </div>
+        )}
+
+        {/* Element Configuration Panel */}
+        {selectedElement && (
+          <div className="w-80 border-l border-border bg-card">
+            <FormElementConfig
+              element={selectedElement}
+              onUpdate={(updates) => updateElement(selectedElement.id, updates)}
+              onClose={() => setSelectedElementId(null)}
+            />
+          </div>
+        )}
+
+        {/* Publish Dialog */}
+        <PublishDialog
+          open={showPublishDialog}
+          onOpenChange={setShowPublishDialog}
+          formSchema={formSchema}
+          onPublish={handlePublishForm}
+          onCopyLink={copyShareUrl}
+          onCopyEmbed={copyEmbedCode}
+        />
+
+        {/* Note: Add OPENAI_API_KEY to your .env.local file */}
+      </div>
+    </DndContext>
+  )
+}

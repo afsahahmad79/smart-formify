@@ -1,0 +1,15 @@
+{
+  "files.watcherExclude": {
+    "**/convex/**": true,
+    "**/convex/**/*.js": true,
+    "**/convex/**/*.js.map": true,
+    "**/convex/**/*.d.ts": true,
+    "**/.next/**": true,
+    "**/node_modules/**": true
+  },
+  "files.exclude": {
+    "**/convex/**/*.js": true,
+    "**/convex/**/*.js.map": true,
+    "**/convex/**/*.d.ts": true
+  }
+}

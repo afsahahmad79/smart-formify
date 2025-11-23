@@ -52,7 +52,7 @@ export function LoginForm({ onToggleMode }: LoginFormProps) {
           description: "Redirecting to your dashboard...",
           variant: "default",
         })
-        router.push("/") // or your app's dashboard path
+        router.push("/dashboard") // or your app's dashboard path
       } else {
         console.log("Sign-in response:", result)
       }

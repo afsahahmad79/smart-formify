@@ -603,42 +603,7 @@ export function FormBuilder() {
                   Publish Form
                 </Button>
               )}
-              <Dialog open={showAIGenerateDialog} onOpenChange={setShowAIGenerateDialog}>
-                <DialogTrigger asChild>
-                  <Button variant="outline">
-                    <Zap className="h-4 w-4 mr-2" />
-                    AI Generate
-                  </Button>
-                </DialogTrigger>
-                <DialogContent className="max-w-md">
-                  <DialogHeader>
-                    <DialogTitle>Generate Form with AI</DialogTitle>
-                    <DialogDescription>
-                      Describe the form you want to create (e.g., "job application form with name, email, and resume").
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="space-y-4">
-                    <Textarea
-                      placeholder="Enter your form description..."
-                      value={prompt}
-                      onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setPrompt(e.target.value)}
-                      disabled={isGenerating}
-                    />
-                  </div>
-                  <DialogFooter>
-                    <Button
-                      onClick={handleGenerateForm}
-                      disabled={isGenerating || !prompt.trim()}
-                    >
-                      {isGenerating ? "Generating..." : "Generate Form"}
-                    </Button>
-                  </DialogFooter>
-                </DialogContent>
-              </Dialog>
-              <Button variant="outline" onClick={saveForm}>
-                <Save className="h-4 w-4 mr-2" />
-                Save
-              </Button>
+              
             </div>
           </div>
 
